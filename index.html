@@ -29,7 +29,7 @@
             cursor: pointer;
             margin: 5px;
         }
-        button:hover { background: #ff6b6b; }
+        button:active { background: #ff6b6b; }
         input {
             padding: 8px;
             border-radius: 6px;
@@ -38,9 +38,10 @@
             color: white;
             font-size: 14px;
             text-align: center;
+            width: 200px;
         }
         #menu { margin: 15px 0; }
-        #status { color: #f0c929; margin: 5px 0; }
+        #status { color: #f0c929; margin: 10px 0; font-size: 14px; }
         .hidden { display: none; }
         #winner { font-size: 24px; margin-top: 10px; color: #f0c929; }
     </style>
@@ -50,10 +51,10 @@
     <div id="menu">
         <button onclick="create()">Создать</button>
         <br><br>
-        <input id="codeInput" placeholder="Код">
+        <input id="codeInput" placeholder="Вставь код">
         <button onclick="join()">Войти</button>
     </div>
-    <div id="status"></div>
+    <div id="status">Загрузка...</div>
     <div id="gameArea" class="hidden">
         <div id="scores">
             <div class="p1">Ты: <span id="myScore">0</span></div>
@@ -72,32 +73,47 @@
         canvas.height = H * SIZE;
 
         const FOOD_COUNT = 5;
-        let peer, conn, playerId, gameState, foods, mySnake, enemySnake, myDir, myScore, enemyScore, alive, gameOver, gameLoop;
+        let peer, conn, playerId, foods, mySnake, enemySnake, myDir, myScore, enemyScore, alive, gameOver, gameLoop;
 
-        const script = document.createElement('script');
-        script.src = 'https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js';
-        document.head.appendChild(script);
+        // PeerJS запасные серверы
+        const PEER_OPTS = {
+            host: '0.peerjs.com',
+            port: 443,
+            secure: true,
+            debug: 0
+        };
 
-        script.onload = () => {
-            peer = new Peer();
+        function initPeer() {
+            if (peer) peer.destroy();
+            peer = new Peer(PEER_OPTS);
+
             peer.on('open', id => {
-                document.getElementById('status').textContent = 'Готов';
+                document.getElementById('status').textContent = `ID: ${id}`;
             });
+
             peer.on('connection', c => {
                 conn = c;
+                document.getElementById('status').textContent = 'Подключён!';
                 setupConnection();
                 playerId = 0;
                 startGame(0);
             });
-        };
+
+            peer.on('error', err => {
+                document.getElementById('status').textContent = 'Ошибка сети. Обнови страницу.';
+            });
+        }
 
         function create() {
-            peer.on('open', id => {
-                document.getElementById('status').textContent = `Код: ${id}`;
-                document.getElementById('codeInput').value = id;
-            });
-            if (peer.id) {
-                document.getElementById('status').textContent = `Код: ${peer.id}`;
+            document.getElementById('status').textContent = 'Получаю код...';
+            if (!peer || !peer.id) {
+                initPeer();
+                peer.on('open', id => {
+                    document.getElementById('status').textContent = `Твой код: ${id}`;
+                    document.getElementById('codeInput').value = id;
+                });
+            } else {
+                document.getElementById('status').textContent = `Твой код: ${peer.id}`;
                 document.getElementById('codeInput').value = peer.id;
             }
         }
@@ -105,20 +121,40 @@
         function join() {
             const code = document.getElementById('codeInput').value.trim();
             if (!code) return;
-            conn = peer.connect(code);
-            setupConnection();
+            document.getElementById('status').textContent = 'Подключаюсь...';
             playerId = 1;
+
+            if (!peer || !peer.id) {
+                initPeer();
+                peer.on('open', () => doJoin(code));
+            } else {
+                doJoin(code);
+            }
+        }
+
+        function doJoin(code) {
+            conn = peer.connect(code, { reliable: true });
+            setupConnection();
+
+            // Таймаут подключения
+            const timeout = setTimeout(() => {
+                if (document.getElementById('gameArea').classList.contains('hidden')) {
+                    document.getElementById('status').textContent = 'Не вышло. Проверь код и попробуй ещё раз.';
+                    if (conn) conn.close();
+                }
+            }, 10000);
+
+            conn.on('open', () => {
+                clearTimeout(timeout);
+                document.getElementById('status').textContent = 'Подключён!';
+                document.getElementById('menu').classList.add('hidden');
+                document.getElementById('gameArea').classList.remove('hidden');
+                document.getElementById('status').classList.add('hidden');
+                startGame(1);
+            });
         }
 
         function setupConnection() {
-            conn.on('open', () => {
-                if (playerId === 1) {
-                    document.getElementById('menu').classList.add('hidden');
-                    document.getElementById('gameArea').classList.remove('hidden');
-                    document.getElementById('status').classList.add('hidden');
-                    startGame(1);
-                }
-            });
             conn.on('data', data => {
                 if (data.type === 'start') {
                     document.getElementById('menu').classList.add('hidden');
@@ -192,18 +228,9 @@
 
             const head = { x: mySnake[0].x + myDir.x, y: mySnake[0].y + myDir.y };
 
-            if (head.x < 0 || head.x >= W || head.y < 0 || head.y >= H) {
-                die();
-                return;
-            }
-            if (mySnake.some(s => s.x === head.x && s.y === head.y)) {
-                die();
-                return;
-            }
-            if (enemySnake && enemySnake.some(s => s.x === head.x && s.y === head.y)) {
-                die();
-                return;
-            }
+            if (head.x < 0 || head.x >= W || head.y < 0 || head.y >= H) { die(); return; }
+            if (mySnake.some(s => s.x === head.x && s.y === head.y)) { die(); return; }
+            if (enemySnake && enemySnake.some(s => s.x === head.x && s.y === head.y)) { die(); return; }
 
             mySnake.unshift(head);
 
@@ -236,7 +263,6 @@
             draw();
         }
 
-        // Клавиатура
         document.addEventListener('keydown', e => {
             const dirs = {
                 ArrowUp: [0, -1], ArrowDown: [0, 1],
@@ -246,7 +272,6 @@
             if (dirs[e.key]) changeDir(dirs[e.key][0], dirs[e.key][1]);
         });
 
-        // Свайпы
         let touchStartX = 0, touchStartY = 0;
         canvas.addEventListener('touchstart', e => {
             e.preventDefault();
@@ -294,9 +319,7 @@
             requestAnimationFrame(draw);
         }
 
-        if (typeof Peer === 'undefined') {
-            document.getElementById('status').textContent = 'Загрузка...';
-        }
+        initPeer();
         draw();
     </script>
 </body>
